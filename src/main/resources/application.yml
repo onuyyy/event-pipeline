@@ -1,3 +1,31 @@
 spring:
   application:
-    name : event-pipeline
+    name: event-pipeline
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/eventpipeline
+    username: ${DB_USERNAME:eventpipeline}
+    password: ${DB_PASSWORD:eventpipeline}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+    show-sql: true
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+  task:
+    execution:
+      pool:
+        core-size: 4
+        max-size: 16
+        queue-capacity: 100
+      thread-name-prefix: async-event-
