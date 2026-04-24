@@ -15,16 +15,16 @@
 
 ## 이벤트 설계 이유
 
-강의 플랫폼의 핵심 사용자 퍼널은 **조회 → 재생 → 결제**입니다. 이 퍼널의 각 단계와 예외 상황을 커버하도록 4가지 이벤트를 설계했습니다.
+이커머스의 핵심 사용자 퍼널인 **상품 조회 → 장바구니 → 결제**를 기준으로 4가지 이벤트를 설계했습니다.
 
 | 이벤트 타입 | 퍼널 단계 | 의미 |
 |---|---|---|
-| `LECTURE_VIEW` | 조회 | 강의 상세 페이지 진입 — 관심 측정 |
-| `LECTURE_PLAY` | 재생 | 수강 시작 — 실제 학습 전환율 측정 |
-| `ENROLLMENT` | 결제 | 수강 신청/결제 완료 — 최종 전환 |
-| `ERROR` | 예외 | 재생 실패, 결제 오류 등 — 이탈 원인 분석 |
+| `PRODUCT_VIEW` | 조회 | 상품 상세 페이지 진입 — 관심 측정 |
+| `ADD_TO_CART` | 장바구니 | 구매 의향 표시 — 중간 전환율 측정 |
+| `PURCHASE_COMPLETED` | 결제 | 최종 전환 완료 |
+| `ERROR_OCCURRED` | 예외 | 조회/장바구니/결제 중 발생한 오류 — 이탈 원인 분석 |
 
-`LECTURE_VIEW → LECTURE_PLAY` 전환율로 콘텐츠 매력도를, `LECTURE_PLAY → ENROLLMENT` 전환율로 구매 의향을 추적할 수 있습니다. `ERROR` 이벤트는 퍼널 이탈 원인을 특정하는 데 활용합니다.
+`PRODUCT_VIEW → ADD_TO_CART` 전환율로 콘텐츠 매력도를, `ADD_TO_CART → PURCHASE_COMPLETED` 전환율로 구매 완주율을 추적할 수 있습니다. `ERROR_OCCURRED` 이벤트는 어느 단계에서 이탈이 발생했는지 특정하는 데 활용합니다.
 
 ---
 
@@ -34,21 +34,25 @@
 
 ```sql
 CREATE TABLE event_logs (
-    id          BIGSERIAL PRIMARY KEY,
-    event_type  VARCHAR(50)  NOT NULL,          -- LECTURE_VIEW | LECTURE_PLAY | ENROLLMENT | ERROR
-    user_id     VARCHAR(100) NOT NULL,           -- 사용자 식별자
-    session_id  VARCHAR(100),                    -- 세션 단위 퍼널 추적
-    status      VARCHAR(20)  NOT NULL,           -- SUCCESS | FAILURE
-    properties  JSONB,                           -- 이벤트별 가변 속성 (lecture_id, error_code 등)
-    created_at  TIMESTAMP    NOT NULL DEFAULT NOW()
+    id             BIGSERIAL PRIMARY KEY,
+    event_type     VARCHAR(50)  NOT NULL,   -- PRODUCT_VIEW | ADD_TO_CART | PURCHASE_COMPLETED | ERROR_OCCURRED
+    user_id        VARCHAR(100) NOT NULL,   -- 사용자 식별자
+    session_id     VARCHAR(100) NOT NULL,   -- 세션 단위 퍼널 추적
+    event_time     TIMESTAMP    NOT NULL,   -- 실제 이벤트 발생 시각
+    traffic_source VARCHAR(50),             -- 유입 경로 (google, direct, ad)
+    device_type    VARCHAR(20),             -- 기기 유형 (mobile, pc)
+    status         VARCHAR(20)  NOT NULL,   -- SUCCESS | FAILURE
+    properties     JSONB,                   -- 이벤트별 가변 속성 (product_id, error_code 등)
+    created_at     TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_event_logs_event_type ON event_logs(event_type);
 CREATE INDEX idx_event_logs_user_id    ON event_logs(user_id);
-CREATE INDEX idx_event_logs_created_at ON event_logs(created_at);
+CREATE INDEX idx_event_logs_session_id ON event_logs(session_id);
+CREATE INDEX idx_event_logs_event_time ON event_logs(event_time);
 ```
 
-**스키마 설계 이유:** 모든 이벤트에 공통되는 필드(event_type, user_id, status, created_at)는 전용 컬럼으로 분리해 인덱싱과 집계 쿼리 성능을 확보했습니다. 이벤트마다 다른 가변 속성(강의 ID, 에러 코드 등)은 JSONB로 저장해 스키마 변경 없이 새 필드를 추가할 수 있도록 했습니다.
+**스키마 설계 이유:** 집계 쿼리에서 `GROUP BY`, `WHERE`, `DATE_TRUNC` 등으로 직접 쓰이는 필드(event_type, user_id, session_id, event_time)는 전용 컬럼으로 분리해 인덱싱 성능을 확보했습니다. 이벤트 타입마다 구조가 다른 가변 속성(product_id, error_code, payment_method 등)은 JSONB로 저장해 스키마 변경 없이 새 필드를 추가할 수 있도록 했습니다.
 
 ---
 
@@ -114,7 +118,7 @@ CREATE INDEX idx_event_logs_created_at ON event_logs(created_at);
 
 ```bash
 # 1. 저장소 클론
-git clone https://github.com/{username}/event-pipeline.git
+git clone https://github.com/onuyyy/event-pipeline.git
 cd event-pipeline
 
 # 2. 전체 스택 실행 (앱 + PostgreSQL + Grafana)
@@ -133,14 +137,34 @@ docker compose up --build
 ### 집계 쿼리 직접 실행
 
 ```bash
-docker compose exec postgres psql -U pipeline -d eventdb
+docker compose exec postgres psql -U eventpipeline -d eventpipeline
 ```
 
 ---
 
 ## 구현하면서 고민한 점
 
-*(Step 7에서 작성 예정)*
+**1. 어떤 필드를 고정 컬럼으로, 어떤 걸 JSONB로 넣을지**
+
+이벤트 타입마다 속성이 달라서 모든 필드를 컬럼으로 만들면 대부분의 행에서 NULL이 많아집니다. 반대로 전부 JSONB에 넣으면 `GROUP BY event_type`이나 `WHERE user_id = ?` 같은 집계 쿼리에서 인덱스를 쓸 수 없습니다.
+
+기준을 하나로 정했습니다. **집계 쿼리에서 직접 쓰이면 전용 컬럼, 그렇지 않으면 JSONB.** `event_type`, `user_id`, `session_id`, `event_time`은 항상 GROUP BY나 WHERE에 쓰이니 컬럼으로, `product_id`, `error_code`, `payment_method` 등 이벤트별 가변 속성은 JSONB에 넣었습니다.
+
+**2. 이벤트 수집에 AOP를 선택한 이유**
+
+처음에는 Generator에서 `ApplicationEventPublisher.publishEvent()`를 직접 호출했는데, 이 방식이면 이벤트를 수집하고 싶은 모든 지점에 발행 코드가 흩어집니다. 실서비스라면 비즈니스 메서드마다 발행 로직이 섞여 수정 범위가 넓어질 것이라 판단했습니다.
+
+`@UserEvent` 어노테이션 + AOP로 바꾸면 수집 로직이 `UserEventAspect` 한 곳에 모이고, 비즈니스 코드는 어노테이션 하나만 붙이면 됩니다. 실제로 개발 중에 Generator가 AOP를 우회하고 있다는 걸 발견해 흐름을 바로잡기도 했습니다.
+
+**3. 동기 처리로 구현한 이유**
+
+실서비스라면 이벤트 저장을 Kafka 같은 메시지 큐로 분리해 비동기 처리하는 게 맞습니다. DB 쓰기 부하가 비즈니스 로직에 영향을 주지 않도록 격리할 수 있기 때문입니다.
+
+과제에서는 파이프라인 전체 흐름(생성 → 발행 → 저장 → 조회)을 명확하게 보여주는 것이 목적이라 동기 처리를 선택했습니다. 비동기 확장이 필요하다면 `@EventListener`에 `@Async`를 붙이거나 중간에 큐를 끼우는 방식으로 확장할 수 있습니다.
+
+**4. Spring Events(`ApplicationEventPublisher`)를 쓴 이유**
+
+Generator에서 Repository를 직접 호출하는 방식도 가능하지만, 그러면 저장 방식이 바뀔 때(예: DB → 파일, DB → 외부 API) Generator 코드도 함께 수정해야 합니다. `ApplicationEventPublisher`를 사이에 두면 발행자(Generator)와 저장 로직(Listener)이 분리되어 각자 독립적으로 변경할 수 있습니다.
 
 ---
 
