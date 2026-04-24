@@ -1,15 +1,11 @@
 package com.eventpipeline.generator;
 
-import com.eventpipeline.domain.EventStatus;
-import com.eventpipeline.domain.EventType;
-import com.eventpipeline.event.UserEventPayload;
+import com.eventpipeline.service.UserActionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
@@ -19,7 +15,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class EventGenerator implements ApplicationRunner {
 
-    private final ApplicationEventPublisher eventPublisher;
+    private final UserActionService userActionService;
 
     private static final Random RANDOM = new Random();
 
@@ -52,15 +48,13 @@ public class EventGenerator implements ApplicationRunner {
 
         MDCUtil.set(userId, sessionId, trafficSource, deviceType);
         try {
-            runSessionFlow(userId, sessionId, trafficSource, deviceType);
+            runSessionFlow();
         } finally {
             MDCUtil.clear();
         }
     }
 
-    private void runSessionFlow(String userId, String sessionId, String trafficSource, String deviceType) {
-        LocalDateTime eventTime = randomRecentTime();
-
+    private void runSessionFlow() {
         // PRODUCT_VIEW 1~3회
         int viewCount  = 1 + RANDOM.nextInt(3);
         String productId = randomProductId();
@@ -73,17 +67,11 @@ public class EventGenerator implements ApplicationRunner {
                 category  = pick(CATEGORIES);
                 price     = randomPrice();
             }
-            eventTime = nextEventTime(eventTime);
-            publish(userId, sessionId, trafficSource, deviceType, eventTime,
-                    EventType.PRODUCT_VIEW, EventStatus.SUCCESS,
-                    productViewProps(productId, category, price));
+            userActionService.viewProduct(productViewProps(productId, category, price));
 
             // PRODUCT_VIEW 이후 ERROR 10%
             if (chance(0.10)) {
-                eventTime = nextEventTime(eventTime);
-                publish(userId, sessionId, trafficSource, deviceType, eventTime,
-                        EventType.ERROR_OCCURRED, EventStatus.FAILURE,
-                        errorProps("view"));
+                userActionService.recordError(errorProps("view"));
                 return;
             }
         }
@@ -91,27 +79,18 @@ public class EventGenerator implements ApplicationRunner {
         // ADD_TO_CART 60%
         if (!chance(0.60)) return;
 
-        eventTime = nextEventTime(eventTime);
-        publish(userId, sessionId, trafficSource, deviceType, eventTime,
-                EventType.ADD_TO_CART, EventStatus.SUCCESS,
-                addToCartProps(productId, category));
+        userActionService.addToCart(addToCartProps(productId, category));
 
         // ADD_TO_CART 이후 ERROR 10%
         if (chance(0.10)) {
-            eventTime = nextEventTime(eventTime);
-            publish(userId, sessionId, trafficSource, deviceType, eventTime,
-                    EventType.ERROR_OCCURRED, EventStatus.FAILURE,
-                    errorProps("cart"));
+            userActionService.recordError(errorProps("cart"));
             return;
         }
 
         // PURCHASE_COMPLETED 55%
         if (!chance(0.55)) return;
 
-        eventTime = nextEventTime(eventTime);
-        publish(userId, sessionId, trafficSource, deviceType, eventTime,
-                EventType.PURCHASE_COMPLETED, EventStatus.SUCCESS,
-                purchaseProps(productId, price));
+        userActionService.completePurchase(purchaseProps(productId, price));
     }
 
     // ── properties builders ────────────────────────────────────────────────
@@ -152,34 +131,7 @@ public class EventGenerator implements ApplicationRunner {
         return p;
     }
 
-    // ── publish ────────────────────────────────────────────────────────────
-
-    private void publish(String userId, String sessionId, String trafficSource, String deviceType,
-                         LocalDateTime eventTime, EventType eventType, EventStatus status,
-                         Map<String, Object> properties) {
-        eventPublisher.publishEvent(UserEventPayload.builder()
-                .eventType(eventType)
-                .userId(userId)
-                .sessionId(sessionId)
-                .eventTime(eventTime)
-                .trafficSource(trafficSource)
-                .deviceType(deviceType)
-                .status(status)
-                .properties(properties)
-                .build());
-    }
-
     // ── utils ──────────────────────────────────────────────────────────────
-
-    private LocalDateTime randomRecentTime() {
-        long minutesInSevenDays = 7L * 24 * 60;
-        return LocalDateTime.now().minusMinutes(RANDOM.nextLong(minutesInSevenDays));
-    }
-
-    private LocalDateTime nextEventTime(LocalDateTime base) {
-        long seconds = 5 + RANDOM.nextLong(596); // 5초 ~ 10분(600초)
-        return base.plusSeconds(seconds);
-    }
 
     private String randomProductId() {
         return "prod_" + String.format("%04d", RANDOM.nextInt(200) + 1);
