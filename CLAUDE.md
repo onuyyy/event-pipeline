@@ -1,7 +1,7 @@
 # CLAUDE.md — event-pipeline
 
 ## Stack
-- Java 21, Spring Boot 4.0.5, Spring Data JPA, PostgreSQL, Lombok, Gradle, Docker Compose, Grafana
+- Java 21, Spring Boot 3.4.5, Spring Data JPA, PostgreSQL, Lombok, Gradle, Docker Compose, Grafana
 
 ## Package Structure
 ```
@@ -14,7 +14,7 @@ com.eventpipeline
 ├── service         # 비즈니스 로직
 ├── controller      # REST 컨트롤러
 ├── generator       # 이벤트 랜덤 생성기
-└── config          # 스프링 설정 (Async, Jackson 등)
+└── config          # 스프링 설정
 ```
 
 ## Naming
@@ -30,19 +30,19 @@ com.eventpipeline
 - Optional 반환: 반드시 `.orElseThrow()` 명시
 - 시간 필드: `LocalDateTime` UTC 기준
 - 상수: `enum`으로 관리 — 매직 스트링 금지
-- 가변 속성(`properties`): `Map<String, Object>` → `ObjectMapper`로 JSONB 직렬화
+- 가변 속성(`properties`): `Map<String, Object>`로 관리하고 JSONB 컬럼에 저장
 
 ## Event Pipeline Rules
 - 새 이벤트 타입 추가: `EventType` enum 한 곳에만 추가
 - AOP 타깃 조건: `public` 메서드 + `@UserEvent` 어노테이션
-- `@EventListener` 메서드: 반드시 `@Async` 적용
+- `@EventListener` 메서드: 동기 처리 기준으로 구현
 - 예외 발생 시: `status = FAILURE`로 이벤트 발행 후 예외 전파
 
 ## DB Rules
 - PK: `BIGSERIAL` (auto-increment)
 - 고정 필드(event_type, user_id, status 등): 전용 컬럼으로 분리
 - 가변 속성만: `properties JSONB`에 저장
-- 인덱스 필수: `event_type`, `user_id`, `created_at`
+- 인덱스 필수: `event_type`, `user_id`, `session_id`, `event_time`
 
 ## Test Rules
 - 단위 테스트: Mockito, 메서드명 `given_when_then` 패턴
