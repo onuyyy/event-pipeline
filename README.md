@@ -84,9 +84,9 @@ CREATE INDEX idx_event_logs_created_at ON event_logs(created_at);
 │  │        ▼                 │                       │
 │  │  ApplicationEventPublisher│                      │
 │  │        │                 │                       │
-│  │        ▼ (@Async)        │                       │
-│  │  EventLogService         │                       │
-│  │    (저장 처리)             │                       │
+│  │        ▼                 │                       │
+│  │  EventListener           │                       │
+│  │    (이벤트 저장)           │                       │
 │  │        │                 │                       │
 │  └────────┼─────────────────┘                       │
 │           │                                         │
@@ -154,4 +154,4 @@ docker compose exec postgres psql -U pipeline -d eventdb
 ### 아키텍처 결정에 AI 협의 활용
 - **AOP vs 직접 호출 방식**: 비즈니스 코드 침투 최소화를 위해 AOP + `@UserEvent` 어노테이션 방식을 채택하는 과정에서 트레이드오프를 AI와 함께 검토했습니다.
 - **JSONB vs 별도 테이블**: 이벤트별 가변 속성 저장 전략에서 확장성과 쿼리 성능 간 균형을 논의해 JSONB 컬럼 방식을 선택했습니다.
-- **동기 vs 비동기 저장**: `@Async` EventListener를 적용해 이벤트 저장이 원본 트랜잭션을 블로킹하지 않도록 설계했습니다.
+- **동기 vs 비동기 저장**: 과제의 핵심은 파이프라인 흐름을 명확하게 보여주는 것이라고 판단해, 이벤트 생성 직후 DB에 바로 저장되는 동기 구조를 선택했습니다. 실서비스에서는 큐나 비동기 처리로 확장할 수 있지만, 과제에서는 설명 가능성과 안정성을 우선했습니다.
