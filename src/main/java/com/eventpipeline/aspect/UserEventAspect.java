@@ -24,12 +24,12 @@ public class UserEventAspect {
 
     @Around("@annotation(userEvent)")
     public Object handle(ProceedingJoinPoint joinPoint, UserEvent userEvent) throws Throwable {
-        String userId       = mdcOrDefault("userId",        "anonymous");
-        String sessionId    = mdcOrDefault("sessionId",     "no-session");
+        String userId        = mdcOrDefault("userId",        "anonymous");
+        String sessionId     = mdcOrDefault("sessionId",     "no-session");
         String trafficSource = mdcOrDefault("trafficSource", "direct");
-        String deviceType   = mdcOrDefault("deviceType",    "pc");
+        String deviceType    = mdcOrDefault("deviceType",    "pc");
 
-        Map<String, Object> properties = extractProperties();
+        Map<String, Object> properties = extractProperties(joinPoint.getArgs());
 
         try {
             Object result = joinPoint.proceed();
@@ -56,15 +56,12 @@ public class UserEventAspect {
                 .build());
     }
 
-    private Map<String, Object> extractProperties() {
-        Map<String, Object> properties = new HashMap<>();
-        putIfPresent(properties, "page_url",     MDC.get("pageUrl"));
-        putIfPresent(properties, "referrer_url", MDC.get("referrerUrl"));
-        return properties;
-    }
-
-    private void putIfPresent(Map<String, Object> map, String key, String value) {
-        if (value != null) map.put(key, value);
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractProperties(Object[] args) {
+        for (Object arg : args) {
+            if (arg instanceof Map) return (Map<String, Object>) arg;
+        }
+        return new HashMap<>();
     }
 
     private String mdcOrDefault(String key, String defaultValue) {
