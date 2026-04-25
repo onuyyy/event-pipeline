@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 @Aspect
 @Component
@@ -44,11 +45,15 @@ public class UserEventAspect {
     private void publish(UserEvent userEvent, String userId, String sessionId,
                          String trafficSource, String deviceType,
                          EventStatus status, Map<String, Object> properties) {
+        LocalDateTime eventTime = Optional.ofNullable(MDC.get("eventTime"))
+                .map(LocalDateTime::parse)
+                .orElseGet(LocalDateTime::now);
+
         eventPublisher.publishEvent(UserEventPayload.builder()
                 .eventType(userEvent.type())
                 .userId(userId)
                 .sessionId(sessionId)
-                .eventTime(LocalDateTime.now())
+                .eventTime(eventTime)
                 .trafficSource(trafficSource)
                 .deviceType(deviceType)
                 .status(status)

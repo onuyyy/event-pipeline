@@ -13,18 +13,36 @@
 
 ---
 
-## 이벤트 설계 이유
+## 실행 방법
 
-이커머스의 핵심 사용자 퍼널인 **상품 조회 → 장바구니 → 결제**를 기준으로 4가지 이벤트를 설계했습니다.
+### 필요 도구
+- Docker Desktop (Docker Compose 포함)
 
-| 이벤트 타입 | 퍼널 단계 | 의미 |
+### 실행
+
+```bash
+# 1. 저장소 클론
+git clone https://github.com/onuyyy/event-pipeline.git
+cd event-pipeline
+
+# 2. 전체 스택 실행 (앱 + PostgreSQL + Grafana)
+docker compose up --build
+
+# 앱 시작 후 이벤트 자동 생성 → PostgreSQL 저장까지 자동 동작
+```
+
+### 접속 정보
+
+| 서비스 | URL | 계정 |
 |---|---|---|
-| `PRODUCT_VIEW` | 조회 | 상품 상세 페이지 진입 — 관심 측정 |
-| `ADD_TO_CART` | 장바구니 | 구매 의향 표시 — 중간 전환율 측정 |
-| `PURCHASE_COMPLETED` | 결제 | 최종 전환 완료 |
-| `ERROR_OCCURRED` | 예외 | 조회/장바구니/결제 중 발생한 오류 — 이탈 원인 분석 |
+| Spring Boot API | http://localhost:8080 | - |
+| Grafana | http://localhost:3000 | admin / admin |
 
-`PRODUCT_VIEW → ADD_TO_CART` 전환율로 콘텐츠 매력도를, `ADD_TO_CART → PURCHASE_COMPLETED` 전환율로 구매 완주율을 추적할 수 있습니다. `ERROR_OCCURRED` 이벤트는 어느 단계에서 이탈이 발생했는지 특정하는 데 활용합니다.
+### 집계 쿼리 직접 실행
+
+```bash
+docker compose exec postgres psql -U eventpipeline -d eventpipeline
+```
 
 ---
 
@@ -53,6 +71,47 @@ CREATE INDEX idx_event_logs_event_time ON event_logs(event_time);
 ```
 
 **스키마 설계 이유:** 집계 쿼리에서 `GROUP BY`, `WHERE`, `DATE_TRUNC` 등으로 직접 쓰이는 필드(event_type, user_id, session_id, event_time)는 전용 컬럼으로 분리해 인덱싱 성능을 확보했습니다. 이벤트 타입마다 구조가 다른 가변 속성(product_id, error_code, payment_method 등)은 JSONB로 저장해 스키마 변경 없이 새 필드를 추가할 수 있도록 했습니다.
+
+---
+
+## 구현하면서 고민한 점
+
+**1. 어떤 필드를 고정 컬럼으로, 어떤 걸 JSONB로 넣을지**
+
+이벤트 타입마다 속성이 달라서 모든 필드를 컬럼으로 만들면 대부분의 행에서 NULL이 많아집니다. 반대로 전부 JSONB에 넣으면 `GROUP BY event_type`이나 `WHERE user_id = ?` 같은 집계 쿼리에서 인덱스를 쓸 수 없습니다.
+
+기준을 하나로 정했습니다. **집계 쿼리에서 직접 쓰이면 전용 컬럼, 그렇지 않으면 JSONB.** `event_type`, `user_id`, `session_id`, `event_time`은 항상 GROUP BY나 WHERE에 쓰이니 컬럼으로, `product_id`, `error_code`, `payment_method` 등 이벤트별 가변 속성은 JSONB에 넣었습니다.
+
+**2. 이벤트 수집에 AOP를 선택한 이유**
+
+처음에는 Generator에서 `ApplicationEventPublisher.publishEvent()`를 직접 호출했는데, 이 방식이면 이벤트를 수집하고 싶은 모든 지점에 발행 코드가 흩어집니다. 실서비스라면 비즈니스 메서드마다 발행 로직이 섞여 수정 범위가 넓어질 것이라 판단했습니다.
+
+`@UserEvent` 어노테이션 + AOP로 바꾸면 수집 로직이 `UserEventAspect` 한 곳에 모이고, 비즈니스 코드는 어노테이션 하나만 붙이면 됩니다. 실제로 개발 중에 Generator가 AOP를 우회하고 있다는 걸 발견해 흐름을 바로잡기도 했습니다.
+
+**3. 동기 처리로 구현한 이유**
+
+실서비스라면 이벤트 저장을 Kafka 같은 메시지 큐로 분리해 비동기 처리하는 게 맞습니다. DB 쓰기 부하가 비즈니스 로직에 영향을 주지 않도록 격리할 수 있기 때문입니다.
+
+과제에서는 파이프라인 전체 흐름(생성 → 발행 → 저장 → 조회)을 명확하게 보여주는 것이 목적이라 동기 처리를 선택했습니다. 비동기 확장이 필요하다면 `@EventListener`에 `@Async`를 붙이거나 중간에 큐를 끼우는 방식으로 확장할 수 있습니다.
+
+**4. Spring Events(`ApplicationEventPublisher`)를 쓴 이유**
+
+Generator에서 Repository를 직접 호출하는 방식도 가능하지만, 그러면 저장 방식이 바뀔 때(예: DB → 파일, DB → 외부 API) Generator 코드도 함께 수정해야 합니다. `ApplicationEventPublisher`를 사이에 두면 발행자(Generator)와 저장 로직(Listener)이 분리되어 각자 독립적으로 변경할 수 있습니다.
+
+---
+
+## 이벤트 설계 이유
+
+이커머스의 핵심 사용자 퍼널인 **상품 조회 → 장바구니 → 결제**를 기준으로 4가지 이벤트를 설계했습니다.
+
+| 이벤트 타입 | 퍼널 단계 | 의미 |
+|---|---|---|
+| `PRODUCT_VIEW` | 조회 | 상품 상세 페이지 진입 — 관심 측정 |
+| `ADD_TO_CART` | 장바구니 | 구매 의향 표시 — 중간 전환율 측정 |
+| `PURCHASE_COMPLETED` | 결제 | 최종 전환 완료 |
+| `ERROR_OCCURRED` | 예외 | 조회/장바구니/결제 중 발생한 오류 — 이탈 원인 분석 |
+
+`PRODUCT_VIEW → ADD_TO_CART` 전환율로 콘텐츠 매력도를, `ADD_TO_CART → PURCHASE_COMPLETED` 전환율로 구매 완주율을 추적할 수 있습니다. `ERROR_OCCURRED` 이벤트는 어느 단계에서 이탈이 발생했는지 특정하는 데 활용합니다.
 
 ---
 
@@ -109,68 +168,7 @@ CREATE INDEX idx_event_logs_event_time ON event_logs(event_time);
 
 ---
 
-## 실행 방법
-
-### 필요 도구
-- Docker Desktop (Docker Compose 포함)
-
-### 실행
-
-```bash
-# 1. 저장소 클론
-git clone https://github.com/onuyyy/event-pipeline.git
-cd event-pipeline
-
-# 2. 전체 스택 실행 (앱 + PostgreSQL + Grafana)
-docker compose up --build
-
-# 앱 시작 후 이벤트 자동 생성 → PostgreSQL 저장까지 자동 동작
-```
-
-### 접속 정보
-
-| 서비스 | URL | 계정 |
-|---|---|---|
-| Spring Boot API | http://localhost:8080 | - |
-| Grafana | http://localhost:3000 | admin / admin |
-
-### 집계 쿼리 직접 실행
-
-```bash
-docker compose exec postgres psql -U eventpipeline -d eventpipeline
-```
-
----
-
-## 구현하면서 고민한 점
-
-**1. 어떤 필드를 고정 컬럼으로, 어떤 걸 JSONB로 넣을지**
-
-이벤트 타입마다 속성이 달라서 모든 필드를 컬럼으로 만들면 대부분의 행에서 NULL이 많아집니다. 반대로 전부 JSONB에 넣으면 `GROUP BY event_type`이나 `WHERE user_id = ?` 같은 집계 쿼리에서 인덱스를 쓸 수 없습니다.
-
-기준을 하나로 정했습니다. **집계 쿼리에서 직접 쓰이면 전용 컬럼, 그렇지 않으면 JSONB.** `event_type`, `user_id`, `session_id`, `event_time`은 항상 GROUP BY나 WHERE에 쓰이니 컬럼으로, `product_id`, `error_code`, `payment_method` 등 이벤트별 가변 속성은 JSONB에 넣었습니다.
-
-**2. 이벤트 수집에 AOP를 선택한 이유**
-
-처음에는 Generator에서 `ApplicationEventPublisher.publishEvent()`를 직접 호출했는데, 이 방식이면 이벤트를 수집하고 싶은 모든 지점에 발행 코드가 흩어집니다. 실서비스라면 비즈니스 메서드마다 발행 로직이 섞여 수정 범위가 넓어질 것이라 판단했습니다.
-
-`@UserEvent` 어노테이션 + AOP로 바꾸면 수집 로직이 `UserEventAspect` 한 곳에 모이고, 비즈니스 코드는 어노테이션 하나만 붙이면 됩니다. 실제로 개발 중에 Generator가 AOP를 우회하고 있다는 걸 발견해 흐름을 바로잡기도 했습니다.
-
-**3. 동기 처리로 구현한 이유**
-
-실서비스라면 이벤트 저장을 Kafka 같은 메시지 큐로 분리해 비동기 처리하는 게 맞습니다. DB 쓰기 부하가 비즈니스 로직에 영향을 주지 않도록 격리할 수 있기 때문입니다.
-
-과제에서는 파이프라인 전체 흐름(생성 → 발행 → 저장 → 조회)을 명확하게 보여주는 것이 목적이라 동기 처리를 선택했습니다. 비동기 확장이 필요하다면 `@EventListener`에 `@Async`를 붙이거나 중간에 큐를 끼우는 방식으로 확장할 수 있습니다.
-
-**4. Spring Events(`ApplicationEventPublisher`)를 쓴 이유**
-
-Generator에서 Repository를 직접 호출하는 방식도 가능하지만, 그러면 저장 방식이 바뀔 때(예: DB → 파일, DB → 외부 API) Generator 코드도 함께 수정해야 합니다. `ApplicationEventPublisher`를 사이에 두면 발행자(Generator)와 저장 로직(Listener)이 분리되어 각자 독립적으로 변경할 수 있습니다.
-
----
-
 ## AI-Assisted Development
-
-이 프로젝트는 Claude Code (claude-sonnet-4-6)를 활용해 개발되었습니다.
 
 ### CLAUDE.md 활용 방식
 프로젝트 루트의 `CLAUDE.md`에 아키텍처 규칙, 네이밍 컨벤션, 금지 패턴을 선언형으로 정의했습니다. Claude Code는 매 작업 시 이 파일을 컨텍스트로 참조해 일관된 코드 스타일을 유지합니다. 예를 들어 새 이벤트 타입을 추가할 때 "EventType enum에만 추가" 규칙이 적용되어 흩어진 하드코딩을 방지합니다.

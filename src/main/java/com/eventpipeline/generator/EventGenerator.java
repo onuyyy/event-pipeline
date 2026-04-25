@@ -6,6 +6,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
@@ -18,6 +19,9 @@ public class EventGenerator implements ApplicationRunner {
     private final UserActionService userActionService;
 
     private static final Random RANDOM = new Random();
+
+    /** 세션의 현재 이벤트 시각 (세션 내에서 순차 전진) */
+    private final ThreadLocal<LocalDateTime> sessionTime = new ThreadLocal<>();
 
     private static final String[] USERS = new String[20];
     private static final String[] TRAFFIC_SOURCES = {"google", "direct", "ad"};
@@ -46,12 +50,28 @@ public class EventGenerator implements ApplicationRunner {
         String trafficSource = pick(TRAFFIC_SOURCES);
         String deviceType    = pick(DEVICE_TYPES);
 
+        // 최근 7일 내 랜덤 시각을 세션 기준 시각으로 설정
+        LocalDateTime baseTime = LocalDateTime.now()
+                .minusDays(RANDOM.nextInt(7))
+                .minusHours(RANDOM.nextInt(24))
+                .minusMinutes(RANDOM.nextInt(60));
+        sessionTime.set(baseTime);
+
         MDCUtil.set(userId, sessionId, trafficSource, deviceType);
+        MDCUtil.setEventTime(sessionTime.get());
         try {
             runSessionFlow();
         } finally {
             MDCUtil.clear();
+            sessionTime.remove();
         }
+    }
+
+    /** 이벤트 발행 전 MDC 시각을 1~30분 전진 */
+    private void advanceSessionTime() {
+        LocalDateTime next = sessionTime.get().plusMinutes(1 + RANDOM.nextInt(30));
+        sessionTime.set(next);
+        MDCUtil.setEventTime(next);
     }
 
     private void runSessionFlow() {
@@ -67,10 +87,12 @@ public class EventGenerator implements ApplicationRunner {
                 category  = pick(CATEGORIES);
                 price     = randomPrice();
             }
+            advanceSessionTime();
             userActionService.viewProduct(productViewProps(productId, category, price));
 
             // PRODUCT_VIEW 이후 ERROR 10%
             if (chance(0.10)) {
+                advanceSessionTime();
                 userActionService.recordError(errorProps("view"));
                 return;
             }
@@ -79,10 +101,12 @@ public class EventGenerator implements ApplicationRunner {
         // ADD_TO_CART 60%
         if (!chance(0.60)) return;
 
+        advanceSessionTime();
         userActionService.addToCart(addToCartProps(productId, category));
 
         // ADD_TO_CART 이후 ERROR 10%
         if (chance(0.10)) {
+            advanceSessionTime();
             userActionService.recordError(errorProps("cart"));
             return;
         }
@@ -90,6 +114,7 @@ public class EventGenerator implements ApplicationRunner {
         // PURCHASE_COMPLETED 55%
         if (!chance(0.55)) return;
 
+        advanceSessionTime();
         userActionService.completePurchase(purchaseProps(productId, price));
     }
 
