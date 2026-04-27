@@ -183,3 +183,11 @@ Generator에서 Repository를 직접 호출하는 방식도 가능하지만, 그
 
 ## 결과 시각화
 <img width="2386" height="1876" alt="Image" src="https://github.com/user-attachments/assets/44cd60cc-d035-420b-9cff-a2c4cdc0c0df" />
+
+---
+
+## Git Commit Attribution Notice
+일부 커밋이 개발 환경 변경으로 인해 다른 GitHub 계정으로 기록되어
+Contributors 목록에 타 계정이 포함되어 있습니다.
+
+해당 커밋을 포함한 전체 프로젝트 구현 및 개발은 본인이 수행하였습니다.
