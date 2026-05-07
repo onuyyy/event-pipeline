@@ -1,12 +1,9 @@
-# Event Pipeline — 라이브클래스 사용자 행동 로그 파이프라인
-
-> **채용 과제 제출용** | 플랫폼/데이터 엔지니어링 인턴
-
+# Event Pipeline 
 ---
 
 ## 프로젝트 개요
 
-라이브클래스(강의 플랫폼)에서 발생하는 사용자 행동 이벤트를 수집·저장·분석·시각화하는 경량 데이터 파이프라인입니다.
+사용자 행동 이벤트를 수집·저장·분석·시각화하는 경량 데이터 파이프라인입니다.
 
 - **이벤트 생성** → **PostgreSQL 저장** → **집계 쿼리 분석** → **Grafana 시각화**
 - Spring Boot AOP 기반으로 비즈니스 코드 변경 없이 이벤트를 자동 수집합니다.
@@ -184,10 +181,3 @@ Generator에서 Repository를 직접 호출하는 방식도 가능하지만, 그
 ## 결과 시각화
 <img width="2386" height="1876" alt="Image" src="https://github.com/user-attachments/assets/44cd60cc-d035-420b-9cff-a2c4cdc0c0df" />
 
----
-
-## Git Commit Attribution Notice
-일부 커밋이 개발 환경 변경으로 인해 다른 GitHub 계정으로 기록되어
-Contributors 목록에 타 계정이 포함되어 있습니다.
-
-해당 커밋을 포함한 전체 프로젝트 구현 및 개발은 본인이 수행하였습니다.
